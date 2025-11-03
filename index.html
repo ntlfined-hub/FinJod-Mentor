@@ -72,6 +72,13 @@
     th{ color:var(--muted); font-weight:600; text-align:left; position:sticky; top:0; background:var(--bg2); z-index:1 }
     .table-viewport tbody tr:hover{ background:#2f2f2f }
 
+    /* section header row inside table */
+    .section-row td{
+      background:rgba(255,255,255,.04);
+      color:#ddd;
+      font-weight:600;
+    }
+
     .badge{ padding:.25rem .5rem; border-radius:999px; font-size:.85rem }
     .badge-inc{ background:rgba(0,200,150,.18); color:#9ff3df; border:1px solid rgba(0,200,150,.35) }
     .badge-exp{ background:rgba(233,30,99,.15); color:#ffb6cc; border:1px solid rgba(233,30,99,.35) }
@@ -218,6 +225,28 @@
         </div>
       </div>
 
+      <!-- ✅ Category Summary Table -->
+      <div class="row">
+        <div class="card" style="flex:1 1 100%">
+          <div class="muted" style="margin-bottom:.5rem">สรุปจำนวนเงินตามหมวด (ช่วงที่เลือก)</div>
+          <div id="catTableWrap" class="table-viewport">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:46px">#</th>
+                  <th style="width:160px">ประเภท</th>
+                  <th>หมวด</th>
+                  <th class="right" style="width:160px">จำนวน (บาท)</th>
+                  <th class="right" style="width:110px">% ภายในประเภท</th>
+                </tr>
+              </thead>
+              <tbody id="tblCats"></tbody>
+            </table>
+          </div>
+          <div id="emptyCats" class="muted" style="margin-top:.5rem; display:none">ยังไม่มีข้อมูล</div>
+        </div>
+      </div>
+
       <!-- Transactions List (Read-only) -->
       <div class="row">
         <div class="card" style="flex:1 1 100%">
@@ -274,11 +303,10 @@ const runningSum = (arr)=>{ let s=0; return arr.map(v=>(s+=v,s)); };
 function _isWithdrawIncomeName(name){ const s=String(name||''); return /ถอน.*ออม|ออม.*ถอน|ถอนออม|ถอนเงินออม|withdraw.*(save|saving)|saving.*withdraw/i.test(s); }
 const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
-// date helpers
+/* date helpers */
 const ymdToDate = s => { const [Y,M,D]=String(s).split('-').map(Number); return new Date(Y, (M||1)-1, D||1); };
 const addDays = (s, n)=>{ const d=ymdToDate(s); d.setDate(d.getDate()+n); return toYMD(d); };
 const clampEndToToday = (s)=>{ const t=todayISO(); return (!s || s>t) ? t : s; };
-// รวมทุกวันตั้งแต่ from ถึง to (inclusive)
 function dateRangeArray(from, to){
   const out = []; const df = new Date(from), dt = new Date(to);
   if (isNaN(df)||isNaN(dt) || df>dt) return out;
@@ -520,6 +548,79 @@ function renderList(items){
   }
 }
 
+/* ✅ NEW: Category summary (by type) */
+function renderCategorySummary(items){
+  const tbody = $('#tblCats');
+  const empty = $('#emptyCats');
+  tbody.innerHTML = '';
+
+  if (!items.length){ empty.style.display='block'; return; }
+  empty.style.display='none';
+
+  // เตรียมชุดข้อมูล 4 กลุ่ม
+  const groups = {
+    income: {},
+    expense: {},
+    saving: {},
+    withdraw: {} // รายรับที่เป็นการถอนออม
+  };
+
+  items.forEach(x=>{
+    const name = x.category_name || 'อื่น ๆ';
+    if (x.type === 'expense'){
+      groups.expense[name] = (groups.expense[name]||0) + x.amount;
+    } else if (x.type === 'saving'){
+      groups.saving[name]  = (groups.saving[name]||0) + x.amount;
+    } else if (x.type === 'income'){
+      if (withdrawIncomeIds.has(String(x.category_id))){
+        groups.withdraw[name] = (groups.withdraw[name]||0) + x.amount;
+      } else {
+        groups.income[name] = (groups.income[name]||0) + x.amount;
+      }
+    }
+  });
+
+  // helper: วาดหนึ่ง section
+  const sections = [
+    { key:'income',   title:'รายรับ',        badge:'badge-inc' },
+    { key:'expense',  title:'รายจ่าย',      badge:'badge-exp' },
+    { key:'saving',   title:'ออมเงิน (ฝาก)', badge:'badge-sav' },
+    { key:'withdraw', title:'ถอนเงินออม',    badge:'badge-sav' }
+  ];
+
+  let rowIdx = 0;
+  for (const sec of sections){
+    const obj = groups[sec.key];
+    const entries = Object.entries(obj);
+    if (!entries.length) continue;
+
+    const total = entries.reduce((s,[,v])=>s+v,0);
+    // header ของ section
+    const hdr = document.createElement('tr');
+    hdr.className = 'section-row';
+    hdr.innerHTML = `<td colspan="5">${sec.title} • รวม ${fmt(total)} บาท</td>`;
+    tbody.appendChild(hdr);
+
+    // เรียงมาก→น้อย
+    entries.sort((a,b)=> b[1]-a[1]).forEach(([name,val],i)=>{
+      rowIdx++;
+      const pct = total>0 ? (val/total*100) : 0;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${rowIdx}</td>
+        <td><span class="badge ${sec.badge}">${sec.title}</span></td>
+        <td>${esc(name)}</td>
+        <td class="right">${fmt(val)}</td>
+        <td class="right">${pct.toFixed(1)}%</td>`;
+      tbody.appendChild(tr);
+    });
+  }
+
+  if (!tbody.childElementCount){
+    empty.style.display='block';
+  }
+}
+
 async function refreshDash(){
   const user_id = $('#selUser').value;
   if (!user_id){ return; }
@@ -573,6 +674,9 @@ async function refreshDash(){
   await drawPrincipalInterestMonthly(user_id, from, to);
 
   renderList(items);
+
+  // ✅ สรุปตามหมวด
+  renderCategorySummary(items);
 }
 
 /* ========= Charts ========= */
@@ -632,7 +736,7 @@ function drawSavingCum(items){
   });
 }
 
-/* ========= Debt charts (ACCRUED = APR/365 like user) ========= */
+/* ========= Debt charts ========= */
 async function drawDebtTimeSeries(user_id, from, to){
   const panelNo = $('#noDataDebtTS');
   if (chartDebtTS) chartDebtTS.destroy();
@@ -642,7 +746,6 @@ async function drawDebtTimeSeries(user_id, from, to){
   const days = dateRangeArray(start, end);
   if (!days.length){ panelNo.classList.remove('hide'); chartDebtTS=null; return; }
 
-  // ดึงหนี้ทั้งหมด + ธุรกรรมหนี้ทั้งหมด (ตัดที่ end เพื่อจำลองย้อนหลัง)
   const [rDebts, rTx] = await Promise.all([
     apiAdmin('admin/debts/list_by_user',   { user_id }),
     apiAdmin('admin/debts/tx/list_by_user',{ user_id, to: end })
@@ -681,12 +784,11 @@ async function drawDebtTimeSeries(user_id, from, to){
     let principal = 0, accrued = 0;
     if (d.start && d.start < start){
       principal = d.p0 > 0 ? d.p0 : (d.pcur > 0 ? d.pcur : 0);
-      accrued = 0; // จะจำลองใหม่ด้วยธุรกรรมก่อนช่วง + ดอกสะสมต่อวัน
+      accrued = 0;
     }
     return { id: d.id, rate: d.rate, start: d.start, principal, accrued };
   });
 
-  // ปรับสถานะจากธุรกรรมก่อนช่วง
   for (const st of states){
     const txBefore = txItems
       .filter(t => t.debt_id === st.id && t.date < start)
@@ -702,12 +804,10 @@ async function drawDebtTimeSeries(user_id, from, to){
 
   const totals = [];
   for (const day of days){
-    // คิดดอกรายวันจาก principal ปัจจุบัน
     for (const st of states){
       if (st.start && st.start > day) continue;
       if (st.principal > 0){ st.accrued += st.principal * ONE_DAY_RATE(st.rate); }
     }
-    // ปรับตามธุรกรรมของวันนั้น
     for (const st of states){
       const list = txByDebtDate[`${st.id}__${day}`] || [];
       for (const t of list){
